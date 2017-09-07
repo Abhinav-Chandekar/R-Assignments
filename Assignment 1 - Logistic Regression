@@ -1,0 +1,348 @@
+#AMMA Assignment by Abhinav Ramesh Chandekar (095) - 
+
+#Step 1 - Install Packages - Start
+
+install.packages("gmodels")
+install.packages("Hmisc")
+install.packages("pROC")
+install.packages("ResourceSelection")
+install.packages("car")
+install.packages("caret")
+install.packages("dplyr")
+library(gmodels)
+library(Hmisc)
+library(pROC)
+library(ResourceSelection)
+library(car)
+library(caret)
+library(dplyr)
+install.packages("InformationValue")
+library(InformationValue)
+
+
+#Step 1 - Install Packages - End
+
+#Step 2 - Setting Up the working directory - Start
+getwd()
+setwd("C:\\Users\\abhinav\\Desktop\\AMMA") #This working directory is the folder where all the bank data is stored
+
+#Step 2 - Setting Up the working directory - End
+
+#Step 3 - Getting Data from different Excel files into R - Start
+
+# reading client datasets
+df.client <- read.csv('bank_client.csv') # stored into a dataframe names df.client
+str(df.client)
+View(df.client)
+
+# reading other attributes
+df.attr <- read.csv('bank_other_attributes.csv')
+str(df.attr)
+View(df.attr)
+
+# reading campaign data
+df.campaign <- read.csv('latest_campaign.csv')
+str(df.campaign)
+View(df.campaign)
+
+# reading campaign outcome
+df.campOutcome <- read.csv('campaign_outcome.csv')
+str(df.campOutcome)
+View(df.campOutcome)
+
+# Merging all the 4 Excel sheets into one data frame based on Customer Id
+
+df.temp1 <- merge(df.client, df.campaign, by = 'Cust_id', all.x = TRUE)
+df.temp2 <- merge(df.temp1, df.attr, by = 'Cust_id', all.x = TRUE)
+df.data <- merge(df.temp2, df.campOutcome, by = 'Cust_id', all.x = TRUE)
+length(unique(df.data$Cust_id)) == nrow(df.data) #checking for any duplicate customer ID
+
+# clearing out temporary tables
+rm(df.temp1,df.temp2)
+
+View(df.data) # df.data is the main dataframe with all the data from different Excel Sheets in one location
+
+#Check for missing values in df.data
+any(is.na(df.data)) # False - which means there are no "NA" values in dataframe
+
+#Step 3 - End
+
+#Step 4 - Splitting df.data into train set and test set
+
+# see a quick summary view of the dataset
+summary(df.data)
+
+# see the tables structure
+str(df.data)
+
+# check the response rate
+CrossTable(df.data$y) #df.data$y - is the output variable
+
+# split the data into training and test
+set.seed(1234) # for reproducibility
+df.data$rand <- runif(nrow(df.data))
+df.train <- df.data[df.data$rand <= 0.7,] #df.train is the data set that will be used to build the model
+df.test <- df.data[df.data$rand > 0.7,] #df.test is the data set that will be used to test the model
+nrow(df.train)
+nrow(df.test)
+
+# how the categorical variables are distributed and are related with target outcome
+CrossTable(df.train$job, df.train$y)
+CrossTable(df.train$marital, df.train$y)
+CrossTable(df.train$education, df.train$y)
+CrossTable(df.train$default, df.train$y)
+CrossTable(df.train$housing, df.train$y)
+CrossTable(df.train$loan, df.train$y)
+CrossTable(df.train$poutcome, df.train$y)
+
+# let see how the numerical variables are distributed
+hist(df.train$age)
+hist(df.train$balance)
+hist(df.train$duration)
+hist(df.train$campaign)
+hist(df.train$pdays)
+hist(df.train$previous)
+describe(df.train[c("age", "balance", "duration", "campaign", "pdays", "previous")])
+
+# Step 4 - End
+
+# Step 5 - Building a full model (including all independent varaibles)
+
+df.train$yact = ifelse(df.train$y == 'yes',1,0)
+#converting df.data$y to binomial varibles to run logistic regression 
+
+View(df.train)
+
+full.model <- glm(formula = yact ~ age + balance + duration + campaign + pdays + previous +
+                    job + marital + education + default + housing + loan + poutcome, 
+                  data=df.train, family = binomial)
+# full model created with 13 independent variables - age + balance + duration + campaign + pdays + previous +job + marital + education + default + housing + loan + poutcome 
+summary(full.model)
+
+# check for vif
+fit <- lm(formula <- yact ~ age + balance + duration + campaign + pdays + previous +
+            job + marital + education + default + housing + loan + poutcome, 
+          data=df.train)
+vif(fit)
+
+# automated variable selection - Backward
+backward <- step(full.model, direction = 'backward')
+summary(backward)
+
+# training probabilities and roc
+df.train$prob = predict(full.model, type=c("response"))
+class(df.train)
+nrow(df.train)
+q <- roc(y ~ prob, data = df.train)
+plot(q)
+auc(q)
+
+# variable importance
+varImp(full.model, scale = FALSE)
+
+# confusion matrix on training set
+df.train$ypred = ifelse(df.train$prob>=.5,'pred_yes','pred_no')
+table(df.train$ypred,df.train$y)
+
+#probabilities on test set
+df.test$prob = predict(full.model, newdata = df.test, type=c("response"))
+
+#confusion matrix on test set
+df.test$ypred = ifelse(df.test$prob>=.5,'pred_yes','pred_no')
+table(df.test$ypred,df.test$y)
+
+
+#ks plot
+ks_plot(actuals=df.train$y, predictedScores=df.train$ypred)
+
+#Step 5 - End
+
+#Step 6 - start removing variables from model based on P value 
+#removing insignificant variables - 1) job unknown removed
+df.train_sig<-df.train[df.train$job!="unknown",]
+
+tentativemodel1<-glm(formula = yact ~ age + balance + duration + campaign + pdays + previous +
+                       job + marital + education + default + housing + loan + poutcome, 
+                     data=df.train_sig, family = binomial)
+
+summary(tentativemodel1)
+df.test_sig<-df.test[df.test$job!="unknown",]
+
+#removing 1) job entrepreneur
+df.train_sig<-df.train_sig[df.train_sig$job!="entrepreneur",]
+View(df.train_sig)
+tentativemodel2<-glm(formula = yact ~ age + balance + duration + campaign + pdays + previous +
+                        job + marital + education + default + housing + loan + poutcome, 
+                      data=df.train_sig, family = binomial)
+summary(tentativemodel2)
+
+df.test_sig<-df.test_sig[df.test_sig$job!="entrepreneur",]
+
+#removing 2) pdays
+
+df.train_sig$pdays<-NULL
+View(df.train_sig)
+tentativemodel3<-glm(formula = yact ~ age + balance + duration + campaign + previous +
+                       job + marital + education + default + housing + loan + poutcome, 
+                     data=df.train_sig, family = binomial)
+summary(tentativemodel3)
+
+df.test_sig$pdays<-NULL
+
+#removing 3)martialsingle
+
+df.train_sig<-df.train_sig[df.train_sig$marital!="single",]
+tentativemodel4<-glm(formula = yact ~ age + balance + duration + campaign + previous +
+                       job + marital + education + default + housing + loan + poutcome, 
+                     data=df.train_sig, family = binomial)
+summary(tentativemodel4)
+df.test_sig<-df.test_sig[df.test_sig$marital!="single",]
+
+#removing 4) jobmanagement
+
+df.train_sig<-df.train_sig[df.train_sig$job!="management",]
+View(df.train_sig)
+
+tentativemodel<- glm(formula = yact ~ age + balance + duration + campaign + previous +
+                       job + marital + education + default + housing + loan + poutcome, 
+                     data=df.train_sig, family = binomial)
+  
+summary(tentativemodel)
+df.test_sig<-df.test_sig[df.test_sig$job!="management",]
+
+
+#removing 5) default 
+
+df.train_sig$default<-NULL
+View(df.train_sig)
+
+tentativemodel6<- glm(formula = yact ~ age + balance + duration + campaign + previous +
+                        job + marital + education + housing + loan + poutcome, 
+                      data=df.train_sig, family = binomial)
+
+summary(tentativemodel6)
+df.test_sig$default<-NULL
+
+#removing 6) jobstudent
+
+df.train_sig<-df.train_sig[df.train_sig$job!="student",]
+
+tentativemodel7<- glm(formula = yact ~ age + balance + duration + campaign + previous +
+                        job + marital + education + housing + loan + poutcome, 
+                      data=df.train_sig, family = binomial)
+summary(tentativemodel7)
+df.test_sig<-df.test_sig[df.test_sig$job!="student",]
+
+#removing 7)poutcomeother
+
+df.train_sig<-df.train_sig[df.train_sig$poutcome!="other",]
+
+tentativemodel8 <-glm(formula = yact ~ age + balance + duration + campaign + previous +
+                        job + marital + education + housing + loan + poutcome, 
+                      data=df.train_sig, family = binomial)
+
+summary(tentativemodel8)
+df.test_sig<-df.test_sig[df.test_sig$poutcome!="other",]
+
+#removing 8) educationunknwon 
+
+df.train_sig<-df.train_sig[df.train_sig$education!="unknown",]
+
+tentativemodel9<-glm(formula = yact ~ age + balance + duration + campaign + previous +
+                       job + marital + education + housing + loan + poutcome, 
+                     data=df.train_sig, family = binomial)
+
+summary(tentativemodel9)
+df.test_sig<-df.test_sig[df.test_sig$education!="unknown",]
+
+#removing 9) balance
+df.train_sig$balance<-NULL
+
+tentativemodel10<-glm(formula = yact ~ age + duration + campaign + previous +
+                        job + marital + education + housing + loan + poutcome, 
+                      data=df.train_sig, family = binomial)
+
+summary(tentativemodel10)
+df.test_sig$balance<-NULL
+
+#removing 10) jobservices
+df.train_sig<-df.train_sig[df.train_sig$job!="services",]
+
+tentativemodel11<-glm(formula = yact ~ age + duration + campaign + previous +
+                        job + marital + education + housing + loan + poutcome, 
+                      data=df.train_sig, family = binomial)
+
+summary(tentativemodel11)
+df.test_sig<-df.test_sig[df.test_sig$job!="services",]
+
+#remove 11) poutcomeunknwon
+df.train_sig<-df.train_sig[df.train_sig$poutcome!="unknown",]
+
+tentativemodel12<-glm(formula = yact ~ age + duration + campaign + previous +
+                        job + marital + education + housing + loan + poutcome, 
+                      data=df.train_sig, family = binomial)
+summary(tentativemodel12)
+df.test_sig<-df.test_sig[df.test_sig$poutcome!="unknown",]
+
+
+#remove 12) jobretired
+
+df.train_sig<-df.train_sig[df.train_sig$job!="retired",]
+tentativemodel13<-glm(formula = yact ~ age + duration + campaign + previous +
+                        job + marital + education + housing + loan + poutcome, 
+                      data=df.train_sig, family = binomial)
+summary(tentativemodel13)
+df.test_sig<-df.test_sig[df.test_sig$job!="retired",]
+
+#remove 13) jobselfemployed 
+
+df.train_sig<-df.train_sig[df.train_sig$job!="self-employed",]
+tentativemodel14<-glm(formula = yact ~ age + duration + campaign + previous +
+                        job + marital + education + housing + loan + poutcome, 
+                      data=df.train_sig, family = binomial)
+summary(tentativemodel14)
+df.test_sig<-df.test_sig[df.test_sig$job!="self-employed",]
+
+#remove 14) maritalmarried
+
+df.train_sig<-df.train_sig[df.train_sig$marital!="married",]
+tentativemodel15<-glm(formula = yact ~ age + duration + campaign + previous +
+                        job + education + housing + loan + poutcome, 
+                      data=df.train_sig, family = binomial)
+summary(tentativemodel15)
+df.test_sig<-df.test_sig[df.test_sig$marital!="married",]
+
+
+#remove 15) loan
+
+df.train_sig$loan<-NULL
+tentativemodel16<-glm(formula = yact ~ age + duration + campaign + previous +
+                        job + education + housing + poutcome, 
+                      data=df.train_sig, family = binomial)
+summary(tentativemodel16)
+df.test_sig$loan<-NULL
+
+#remove 16) education tertiary
+
+df.train_sig<-df.train_sig[df.train_sig$education!="tertiary",]
+tentativemodel17<-glm(formula = yact ~ age + duration + campaign + previous +
+                        job + education + housing + poutcome, 
+                      data=df.train_sig, family = binomial)
+summary(tentativemodel17)
+df.test_sig<-df.test_sig[df.test_sig$education!="tertiary",]
+
+#remove 17) Previous
+df.train_sig$previous<-NULL
+finalmodel<-glm(formula = yact ~ age + duration + campaign +
+                        job + education + housing + poutcome, 
+                      data=df.train_sig, family = binomial)
+summary(finalmodel)
+df.test_sig$previous<-NULL
+
+View(df.train_sig)
+View(df.test_sig)
+
+# confusion matrix for new model without wasteful variables 
+
+df.train_sig$ypred = ifelse(df.train_sig$prob>=.5,'pred_yes','pred_no')
+table(df.train_sig$ypred,df.train_sig$y)
