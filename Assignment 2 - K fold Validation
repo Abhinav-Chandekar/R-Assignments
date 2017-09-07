@@ -1,0 +1,185 @@
+# STEP - 1 START OF CODE # Install relevant packages
+
+install.packages("titanic")
+install.packages("rpart.plot")
+install.packages("randomForest")
+install.packages("DAAG")
+library(titanic)
+library(rpart.plot)
+library(gmodels)
+library(Hmisc)
+library(pROC)
+library(ResourceSelection)
+library(car)
+library(caret)
+library(dplyr)
+library(InformationValue)
+library(rpart)
+library(randomForest)
+library("DAAG")
+
+cat("\014") # Clearing the screen
+
+# Step 1 : End
+
+# Step 2 : Import data file 
+
+getwd()
+setwd("C:\\Users\\abhinav\\Desktop\\AMMA")
+#This working directory is the folder where all the data is stored
+
+df.titanic<-read.csv('train.csv')
+#import data from excel into a dataframe called df.titanic
+View(df.titanic)
+str(df.titanic)
+
+# Step 2 : End
+
+# Step 3 : Data preparation for modelling
+
+# Remove irrelevant variables - Ticket, Cabin, Embraked, from the dataframe
+
+df.titanic$Ticket<-NULL
+df.titanic$Cabin<-NULL
+df.titanic$Embarked<-NULL
+View(df.titanic)
+
+# Identifying if columns have missing values
+any(is.na(df.titanic$PassengerId))#FALSE - No missing values
+any(is.na(df.titanic$Survived))#FALSE - No missing values
+any(is.na(df.titanic$Pclass))#FALSE - No missing values
+any(is.na(df.titanic$Name))#FALSE - No missing values
+any(is.na(df.titanic$Sex))#FALSE - No missing values
+any(is.na(df.titanic$Age))#TRUE - Missing values exist in Age variable
+any(is.na(df.titanic$SibSp))#FALSE - No missing values
+any(is.na(df.titanic$Fare))#FALSE - No missing values
+
+# Missing values exist only in Age varible which is metric in nature and hence
+# can be replaced by the average of all the other data points in the column
+
+# Replacing NA Values
+
+df.titanic$Age[is.na(df.titanic$Age)] <- mean(df.titanic$Age, na.rm = TRUE)
+View(df.titanic)
+
+#splitting titanic dataset into train and test in 70,30 ratio
+
+set.seed(1234) # for reproducibility
+df.titanic$rand <- runif(nrow(df.titanic))
+df.titanic_train <- df.titanic[df.titanic$rand <= 0.7,]
+df.titanic_test <- df.titanic[df.titanic$rand > 0.7,]
+
+# Step 3 : End of Data Preparation - Ready for Modelling
+
+# Step 4 : Model Building
+
+CrossTable(df.titanic_train$Survived)# number of survived vs number of dead in training model
+
+full.model.titanic <- glm(formula = Survived ~ Pclass + Sex + Age + SibSp + Parch + Fare,
+                          data = df.titanic_train, family = binomial)# family = binomial implies that the regression is logistic in nature
+
+# Check for multicollinearity in model through vif
+fit.model.titanic <- lm(formula = Survived ~ Pclass + Sex + Age + SibSp + Parch + Fare,
+                          data = df.titanic_train)
+summary(fit.model.titanic)
+
+#vif - remove those variables which have high vif >5
+vif(fit.model.titanic) 
+# All variables' vif is under 5
+
+# Start removing insignificant variables from logistic regression model
+summary(full.model.titanic)
+
+# Remove variable Fare from model as it is insignificant 
+
+df.titanic_train$Fare<-NULL
+full.model.titanic <- glm(formula = Survived ~ Pclass + Sex + Age + SibSp + Parch,
+                          data = df.titanic_train, family = binomial)
+summary(full.model.titanic)
+
+# Remove variable Parch from model as it is insignificant 
+
+df.titanic_train$Parch<-NULL
+full.model.titanic <- glm(formula = Survived ~ Pclass + Sex + Age + SibSp,
+                          data = df.titanic_train, family = binomial)
+summary(full.model.titanic)
+
+# Finally, we have a model that has all significant variables
+
+# Step 4 : End of Modelling Process
+
+# Step 5 : Test the model on Train and Test data for Accuracy
+df.titanic_train$prob = predict(full.model.titanic, type = c("response"))
+View(df.titanic_train)
+
+df.titanic_train$Survived.pred = ifelse(df.titanic_train$prob>=.5,'pred_yes','pred_no')
+View(df.titanic_train)
+table(df.titanic_train$Survived.pred,df.titanic_train$Survived)
+
+# Test the model on test data 
+df.titanic_test$prob = predict(full.model.titanic, newdata = df.titanic_test, type = c("response"))
+
+
+df.titanic_test$Survived.pred = ifelse(df.titanic_test$prob>=.5,'pred_yes','pred_no')
+View(df.titanic_test)
+table(df.titanic_test$Survived.pred,df.titanic_test$Survived)
+
+# Step 5 : End of testing model 
+
+# Step 6 : Testing for Jack n Rose's survival
+
+df.jackrose <- read.csv('Book1.csv')
+df.jackrose$prob = predict(full.model.titanic, newdata=df.jackrose, type=c("response"))
+df.jackrose$Survived.pred = ifelse(df.jackrose$prob>=.5,'pred_yes','pred_no')
+head(df.jackrose)
+
+# Jack dies, Rose survives
+# Step 6 : End of step
+
+# Step 7 : START  K-fold cross validation
+
+# Defining the K Fold CV function here
+
+Kfold_func <- function(dataset,formula,family,k)
+{
+  object <- glm(formula=formula, data=dataset, family = family)
+  CVbinary(object, nfolds= k, print.details=TRUE)
+}
+
+#Defining the function to calculate Mean Squared Error here
+MeanSquareError_func <- function(dataset,formula)
+{
+  LM_Object <- lm(formula=formula, data=dataset)
+  LM_Object_sum <-summary(LM_Object)
+  MSE <- mean(LM_Object_sum$residuals^2)
+  print("Mean squared error")
+  print(MSE)
+}
+
+#Performing KFold CV on Training set by calling the KFOLD CV function here
+Kfoldobj <- Kfold_func(df.titanic,Survived ~ Pclass + Sex + SibSp + Age,binomial,10)
+
+#Calling the Mean Squared Error function on the training set here
+MSE_Train <-MeanSquareError_func(df.titanic,Survived ~ Pclass + Sex + SibSp + Age)
+
+#confusion matrix on training set
+
+table(df.titanic$Survived,round(Kfoldobj$cvhat))
+print("Estimate of Accuracy")
+print(Kfoldobj$acc.cv)
+
+#Performing KFold CV on test set by calling the KFOLD CV function here
+Kfoldobj.test <- Kfold_func(df.titanic,Survived ~ Pclass + Sex + SibSp + Age,binomial,10)
+
+#Calling the Mean Squared Error function on the test set here
+MSE_Test <-MeanSquareError_func(df.titanic,Survived ~ Pclass + Sex + SibSp + Age)
+
+#Confusion matrix on test set
+table(df.titanic$Survived,round(Kfoldobj.test$cvhat))
+print("Estimate of Accuracy")
+print(Kfoldobj.test$acc.cv)
+
+## END K-FOLD CROSS VALIDATION ##
+
+# STEP - 7 END #
+
